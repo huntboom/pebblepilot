@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Run, SDKAgent } from "@cursor/sdk";
 import { CursorBridge } from "./cursor.js";
-import { getDiffStats } from "./git.js";
+import { buildAgentPrompt, getDiffStats, getRepoGitInfo } from "./git.js";
 import { NotificationBus } from "./notifications.js";
 import { ProjectRegistry } from "./projects.js";
 import type {
@@ -9,6 +9,7 @@ import type {
   AgentStatus,
   CompactAgent,
   CreateAgentRequest,
+  PushPolicy,
 } from "./types.js";
 
 interface LiveHandles {
@@ -49,11 +50,28 @@ export class SessionManager {
     return { ...session, activityLog: [...session.activityLog] };
   }
 
+  /** Most recently updated session for a project (if any). */
+  latestForProject(projectId: string): AgentSession | undefined {
+    let best: AgentSession | undefined;
+    for (const session of this.sessions.values()) {
+      if (session.projectId !== projectId) continue;
+      if (!best || session.updatedAt > best.updatedAt) best = session;
+    }
+    if (!best) return undefined;
+    this.refreshElapsed(best);
+    return { ...best, activityLog: [...best.activityLog] };
+  }
+
   async create(req: CreateAgentRequest): Promise<AgentSession> {
-    const project = this.projects.get(req.projectId);
-    if (!project) throw new Error(`Unknown project: ${req.projectId}`);
     const prompt = req.prompt?.trim();
     if (!prompt) throw new Error("prompt is required");
+
+    const pushPolicy: PushPolicy = req.pushPolicy ?? "none";
+
+    // Prefer existing /home/hunt/github/<repo>; clone only if missing.
+    const project = await this.projects.ensureReady(req.projectId);
+    const gitInfo = await getRepoGitInfo(project.cwd);
+    const fullPrompt = buildAgentPrompt(prompt, project.cwd, gitInfo, pushPolicy);
 
     const id = randomUUID();
     const createdAt = nowIso();
@@ -68,8 +86,14 @@ export class SessionManager {
       updatedAt: createdAt,
       startedAt: createdAt,
       elapsedMs: 0,
-      lastActivity: "Starting agent...",
-      activityLog: ["Starting agent..."],
+      lastActivity: gitInfo
+        ? `${gitInfo.branch} · ${gitInfo.statusLabel}`
+        : "Starting agent...",
+      activityLog: [
+        gitInfo
+          ? `Local ${gitInfo.branch} @ ${gitInfo.head}: ${clip(gitInfo.subject, 60)}`
+          : "Starting agent...",
+      ],
       needsApproval: false,
     };
 
@@ -82,7 +106,7 @@ export class SessionManager {
     try {
       const { agent, run, agentId, runId } = await this.cursor.startAgent(
         project.cwd,
-        prompt,
+        fullPrompt,
         callbacks,
       );
       const live = this.handles.get(id);

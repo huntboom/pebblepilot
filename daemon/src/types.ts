@@ -12,7 +12,34 @@ export interface ProjectConfig {
   name: string;
   cwd: string;
   presets?: string[];
+  /** Where this project came from */
+  source?: "config" | "github" | "local";
+  cloneUrl?: string;
+  sshUrl?: string;
+  fullName?: string;
 }
+
+export interface RepoGitInfo {
+  branch: string;
+  head: string;
+  subject: string;
+  dirty: boolean;
+  changed: number;
+  ahead: number;
+  behind: number;
+  statusLabel: string;
+}
+
+export interface ProjectListItem extends ProjectConfig {
+  ready: boolean;
+  lastAgentId?: string;
+  lastTask?: string;
+  lastStatus?: AgentStatus;
+  lastActivity?: string;
+  git?: RepoGitInfo;
+}
+
+export type PushPolicy = "none" | "ask" | "push";
 
 export interface AppConfig {
   host: string;
@@ -22,6 +49,12 @@ export interface AppConfig {
   defaultModel: string;
   pollIntervalMs: number;
   projects: ProjectConfig[];
+  /** GitHub username/org whose repos appear on the watch */
+  githubUser: string;
+  /** Local directory where repos are cloned (e.g. ~/github) */
+  reposRoot: string;
+  /** Optional PAT for private repos + higher rate limits */
+  githubToken?: string;
 }
 
 export interface DiffStats {
@@ -56,6 +89,8 @@ export interface AgentSession {
 export interface CreateAgentRequest {
   projectId: string;
   prompt: string;
+  /** none = no commit/push; ask = commit ok, no push; push = commit+push when done */
+  pushPolicy?: PushPolicy;
 }
 
 export interface MessageAgentRequest {

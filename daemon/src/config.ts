@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { loadEnvFiles } from "./env.js";
 import type { AppConfig } from "./types.js";
@@ -11,6 +12,8 @@ const DEFAULTS: AppConfig = {
   defaultModel: "composer-2.5",
   pollIntervalMs: 4000,
   projects: [],
+  githubUser: "huntboom",
+  reposRoot: resolve(homedir(), "github"),
 };
 
 function findConfigPath(): string | null {
@@ -41,36 +44,49 @@ export function loadConfig(): AppConfig {
     ...DEFAULTS,
     ...raw,
     projects: raw.projects ?? [],
+    githubUser: raw.githubUser ?? DEFAULTS.githubUser,
+    reposRoot: raw.reposRoot ?? DEFAULTS.reposRoot,
   };
 
-  // Env wins for secrets / bind settings
+  // Env wins for secrets / bind / GitHub settings
   if (process.env.PEBBLEPILOT_HOST) config.host = process.env.PEBBLEPILOT_HOST;
-  if (process.env.PEBBLEPILOT_PORT) config.port = Number(process.env.PEBBLEPILOT_PORT) || config.port;
+  if (process.env.PEBBLEPILOT_PORT) {
+    config.port = Number(process.env.PEBBLEPILOT_PORT) || config.port;
+  }
   if (process.env.PEBBLEPILOT_TOKEN) config.token = process.env.PEBBLEPILOT_TOKEN;
+  if (process.env.PEBBLEPILOT_GITHUB_USER) {
+    config.githubUser = process.env.PEBBLEPILOT_GITHUB_USER;
+  }
+  if (process.env.PEBBLEPILOT_REPOS_ROOT) {
+    config.reposRoot = resolve(process.env.PEBBLEPILOT_REPOS_ROOT);
+  } else {
+    config.reposRoot = resolve(config.reposRoot);
+  }
+  if (process.env.GITHUB_TOKEN?.trim()) {
+    config.githubToken = process.env.GITHUB_TOKEN.trim();
+  } else if (process.env.GH_TOKEN?.trim()) {
+    config.githubToken = process.env.GH_TOKEN.trim();
+  }
 
   if (!path) {
     console.warn(
-      "[pebblepilot] No config.json found — using .env / defaults. Copy config.example.json for projects.",
+      "[pebblepilot] No config.json found — using GitHub/local discovery + .env.",
     );
   }
 
-  if (!config.token || config.token === "change-me" || config.token === "change-me-to-a-long-random-string") {
+  if (
+    !config.token ||
+    config.token === "change-me" ||
+    config.token === "change-me-to-a-long-random-string"
+  ) {
     console.warn(
       "[pebblepilot] WARNING: using a weak/default token. Set PEBBLEPILOT_TOKEN in .env.",
     );
   }
 
-  if (config.projects.length === 0) {
-    console.warn("[pebblepilot] WARNING: no projects configured.");
-  }
-
-  for (const project of config.projects) {
-    if (!existsSync(project.cwd)) {
-      console.warn(
-        `[pebblepilot] WARNING: project "${project.id}" cwd does not exist: ${project.cwd}`,
-      );
-    }
-  }
+  console.log(
+    `[pebblepilot] repos: github.com/${config.githubUser} → ${config.reposRoot}`,
+  );
 
   return config;
 }

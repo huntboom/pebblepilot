@@ -7,6 +7,7 @@ const CMD = {
   START: 4,
   STOP: 5,
   APPROVE: 6,
+  PROJECT: 7,
 };
 
 let bus = null;
@@ -49,9 +50,11 @@ function pump() {
   if (pending || !writable || !queue.length || !bus) return;
   const next = queue.shift();
   pending = next;
+  // START can clone a repo first — allow longer.
+  var timeoutMs = next.cmd === CMD.START ? 90000 : 20000;
   next.timer = setTimeout(function () {
     if (pending === next) failPending(new Error("Timeout"));
-  }, 15000);
+  }, timeoutMs);
   try {
     bus.write(
       new Map([
@@ -114,9 +117,42 @@ export function initApi(onReady) {
   });
 }
 
+function expandProject(p) {
+  if (!p) return null;
+  return {
+    id: p.id || p.i || "",
+    name: p.name || p.n || "",
+    ready: p.ready !== undefined ? !!p.ready : true,
+    lastAgentId: p.lastAgentId || p.a || "",
+    lastTask: p.lastTask || p.t || "",
+    lastStatus: p.lastStatus || p.s || "",
+    lastActivity: p.lastActivity || "",
+    branch: p.branch || "",
+    head: p.head || "",
+    subject: p.subject || "",
+    dirty: !!p.dirty,
+    statusLabel: p.statusLabel || "",
+    changed: p.changed || 0,
+    presets: p.presets,
+  };
+}
+
 export function fetchProjects() {
   return call(CMD.PROJECTS).then(function (p) {
-    return p.projects || [];
+    var list = p.projects || [];
+    var out = [];
+    var i;
+    for (i = 0; i < list.length; i++) {
+      var item = expandProject(list[i]);
+      if (item && item.id) out.push(item);
+    }
+    return out;
+  });
+}
+
+export function fetchProject(id) {
+  return call(CMD.PROJECT, id).then(function (p) {
+    return expandProject(p.project);
   });
 }
 
@@ -132,8 +168,16 @@ export function fetchAgent(id) {
   });
 }
 
-export function startAgent(projectId, prompt) {
-  return call(CMD.START, projectId, prompt).then(function (p) {
+export function startAgent(projectId, prompt, pushPolicy) {
+  var data = prompt;
+  if (pushPolicy) {
+    try {
+      data = JSON.stringify({ prompt: prompt, pushPolicy: pushPolicy });
+    } catch (_) {
+      data = prompt;
+    }
+  }
+  return call(CMD.START, projectId, data).then(function (p) {
     return p.agent;
   });
 }

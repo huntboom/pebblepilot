@@ -6,6 +6,7 @@ var moddableProxy = require("@moddable/pebbleproxy");
 var clay = new Clay(clayConfig, null, { autoHandleEvents: false });
 var SETTINGS_KEY = "pebblepilot-settings";
 var TIMEOUT_MS = 12000;
+var START_TIMEOUT_MS = 90000;
 
 // Placeholders only — real values come from Clay phone settings (localStorage).
 // Do not put secrets or LAN IPs here; they would be committed to git.
@@ -21,7 +22,8 @@ var CMD = {
   AGENT: 3,
   START: 4,
   STOP: 5,
-  APPROVE: 6
+  APPROVE: 6,
+  PROJECT: 7
 };
 
 function clip(s, max) {
@@ -93,7 +95,7 @@ function flattenClayResponse(raw) {
   return flat;
 }
 
-function xhr(method, path, body, cb) {
+function xhr(method, path, body, cb, timeoutMs) {
   var settings = loadSettings();
   var base = String(settings.DaemonUrl || defaults.DaemonUrl).replace(/\/$/, "");
   var token = settings.DaemonToken || defaults.DaemonToken;
@@ -105,7 +107,7 @@ function xhr(method, path, body, cb) {
     done = true;
     try { req.abort(); } catch (e) {}
     cb(new Error("Timeout"));
-  }, TIMEOUT_MS);
+  }, timeoutMs || TIMEOUT_MS);
 
   req.open(method, url, true);
   req.setRequestHeader("Authorization", "Bearer " + token);
@@ -160,7 +162,11 @@ function pushApiKeyToDaemon(cb) {
 function reply(cmd, ok, payloadObj) {
   var payload = "";
   try { payload = JSON.stringify(payloadObj || {}); } catch (e) { payload = "{}"; }
-  payload = clip(payload, 900);
+  // AppMessage PAYLOAD must stay small or JSON arrives truncated → empty list on watch.
+  if (payload.length > 1600) {
+    console.log("PebblePilot payload too large (" + payload.length + ") cmd=" + cmd);
+    payload = clip(payload, 1600);
+  }
   Pebble.sendAppMessage({
     CMD: cmd,
     STATUS: ok ? 1 : 0,
@@ -168,18 +174,86 @@ function reply(cmd, ok, payloadObj) {
   });
 }
 
+function packProjectsForWatch(rawList) {
+  // Local checkouts only — remote-only repos balloon the payload and aren't useful yet.
+  var ready = [];
+  var i;
+  for (i = 0; i < (rawList || []).length; i++) {
+    var p = rawList[i];
+    if (p && p.ready) ready.push(p);
+  }
+  // Ultra-compact keys so ~24 repos fit under the AppMessage ceiling.
+  var packed = [];
+  for (i = 0; i < ready.length; i++) {
+    var next = {
+      i: String(ready[i].id || ""),
+      n: String(ready[i].name || ready[i].id || ""),
+      s: String(ready[i].lastStatus || ""),
+      t: clip(ready[i].lastTask || "", 18)
+    };
+    packed.push(next);
+    var trial = JSON.stringify({ projects: packed });
+    if (trial.length > 1500) {
+      packed.pop();
+      break;
+    }
+  }
+  return packed;
+}
+
+function unpackProject(p) {
+  if (!p) return null;
+  // Support compact (i/n) and full (id/name) shapes.
+  return {
+    id: p.id || p.i || "",
+    name: p.name || p.n || "",
+    ready: p.ready !== undefined ? !!p.ready : true,
+    lastAgentId: p.lastAgentId || p.a || "",
+    lastTask: p.lastTask || p.t || "",
+    lastStatus: p.lastStatus || p.s || "",
+    lastActivity: p.lastActivity || "",
+    branch: p.branch || "",
+    head: p.head || "",
+    subject: p.subject || "",
+    dirty: !!p.dirty,
+    statusLabel: p.statusLabel || "",
+    changed: p.changed || 0
+  };
+}
+
 function handleCommand(cmd, arg, data) {
   if (cmd === CMD.PROJECTS) {
     xhr("GET", "/projects", null, function (err, res) {
       if (err) return reply(cmd, false, { error: err.message });
-      var projects = (res.projects || []).map(function (p) {
-        return {
+      var packed = packProjectsForWatch(res.projects || []);
+      console.log("PebblePilot projects packed=" + packed.length);
+      reply(cmd, true, { projects: packed });
+    });
+    return;
+  }
+
+  if (cmd === CMD.PROJECT) {
+    xhr("GET", "/projects/" + encodeURIComponent(arg), null, function (err, res) {
+      if (err) return reply(cmd, false, { error: err.message });
+      var p = res.project || {};
+      var git = p.git || {};
+      reply(cmd, true, {
+        project: {
           id: p.id,
           name: p.name,
-          presets: (p.presets || []).slice(0, 5)
-        };
+          ready: !!p.ready,
+          lastAgentId: p.lastAgentId || "",
+          lastTask: clip(p.lastTask || "", 40),
+          lastStatus: p.lastStatus || "",
+          lastActivity: clip(p.lastActivity || "", 40),
+          branch: git.branch || "",
+          head: git.head || "",
+          subject: clip(git.subject || "", 50),
+          dirty: !!git.dirty,
+          statusLabel: git.statusLabel || "",
+          changed: git.changed || 0
+        }
       });
-      reply(cmd, true, { projects: projects });
     });
     return;
   }
@@ -207,27 +281,44 @@ function handleCommand(cmd, arg, data) {
         error: "No Cursor API key in phone settings. Open PebblePilot settings, paste key, Save."
       });
     }
-    xhr("POST", "/agents", { projectId: arg, prompt: data }, function (err, res) {
-      if (err) return reply(cmd, false, { error: err.message });
-      var agent = res.agent || {};
-      reply(cmd, true, {
-        agent: {
-          id: agent.id,
-          name: agent.projectName || arg,
-          task: clip(agent.task || data, 80),
-          status: agent.status || "starting",
-          elapsed: "0m 00s",
-          activity: agent.error || "Starting...",
-          summary: "",
-          error: agent.error || "",
-          files: 0,
-          insertions: 0,
-          deletions: 0,
-          needsApproval: false,
-          log: []
-        }
-      });
-    });
+    var prompt = data;
+    var pushPolicy = "none";
+    try {
+      var parsed = JSON.parse(data);
+      if (parsed && typeof parsed === "object" && parsed.prompt) {
+        prompt = parsed.prompt;
+        if (parsed.pushPolicy) pushPolicy = String(parsed.pushPolicy);
+      }
+    } catch (e) {
+      // plain string prompt from older watch builds
+    }
+    xhr(
+      "POST",
+      "/agents",
+      { projectId: arg, prompt: prompt, pushPolicy: pushPolicy },
+      function (err, res) {
+        if (err) return reply(cmd, false, { error: err.message });
+        var agent = res.agent || {};
+        reply(cmd, true, {
+          agent: {
+            id: agent.id,
+            name: agent.projectName || arg,
+            task: clip(agent.task || prompt, 80),
+            status: agent.status || "starting",
+            elapsed: "0m 00s",
+            activity: agent.error || agent.lastActivity || "Starting...",
+            summary: "",
+            error: agent.error || "",
+            files: 0,
+            insertions: 0,
+            deletions: 0,
+            needsApproval: false,
+            log: []
+          }
+        });
+      },
+      START_TIMEOUT_MS
+    );
     return;
   }
 

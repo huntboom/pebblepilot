@@ -5,17 +5,9 @@
   "cursorApiKeyEnv": "CURSOR_API_KEY",
   "defaultModel": "composer-2.5",
   "pollIntervalMs": 4000,
+  "githubUser": "huntboom",
+  "reposRoot": "/home/you/github",
   "projects": [
-    {
-      "id": "digital-den",
-      "name": "Digital Den",
-      "cwd": "/home/you/github/digital-den",
-      "presets": [
-        "Fix the most recent failing tests.",
-        "Investigate and fix the mobile camera controls.",
-        "Summarize current git status and open issues."
-      ]
-    },
     {
       "id": "pebblepilot",
       "name": "PebblePilot",

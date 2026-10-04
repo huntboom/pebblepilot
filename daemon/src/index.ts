@@ -16,6 +16,12 @@ async function main(): Promise<void> {
     console.warn("[pebblepilot] Daemon will serve status APIs; starting agents requires the key.");
   }
   const projects = new ProjectRegistry(config);
+  void projects.refresh(true).catch((err) => {
+    console.warn(
+      "[pebblepilot] initial GitHub refresh failed:",
+      err instanceof Error ? err.message : err,
+    );
+  });
   const bus = new NotificationBus();
   const cursor = new CursorBridge(apiKey, config.defaultModel);
   const sessions = new SessionManager(projects, cursor, bus);

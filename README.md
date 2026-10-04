@@ -10,11 +10,14 @@ Start preset tasks, watch status, stop runs, and approve / continue — all from
 
 ## Features
 
-- **Agents list** on-watch with status and short message previews
-- **New Task** flow: pick a project → pick a preset prompt
+- **Local-first repos** — uses checkouts under `PEBBLEPILOT_REPOS_ROOT` (e.g. `/home/hunt/github/<repo>`); only clones if a folder is missing
+- **Repo screen** — branch, dirty/clean status, **last commit message**, last agent/task
+- **Push policy** — No push / Ask before push / Commit+push (injected into the agent prompt)
+- **Voice commands** — Alloy `Dictation` mic API on Pebble Time 2 for freeform tasks
+- **Preset prompts** — quick starts when you don’t want to speak
 - **Stop / Approve / Continue** without picking up the phone
 - **Clay settings** on the phone for daemon URL, shared token, and Cursor API key
-- **Local agents** via [`@cursor/sdk`](https://www.npmjs.com/package/@cursor/sdk) against each project’s working directory
+- **Local agents** via [`@cursor/sdk`](https://www.npmjs.com/package/@cursor/sdk) in each repo’s working directory
 
 ## Layout
 
@@ -54,12 +57,11 @@ Edit **`.env`** (never commit this file):
 | `PEBBLEPILOT_HOST` | Bind address (`0.0.0.0` for LAN, or a Tailscale IP) |
 | `PEBBLEPILOT_PORT` | Default `8787` |
 | `PEBBLEPILOT_LAN_HOST` | IP your phone uses to reach this machine |
+| `PEBBLEPILOT_GITHUB_USER` | GitHub user/org whose repos appear on the watch |
+| `PEBBLEPILOT_REPOS_ROOT` | Directory for local clones (default `~/github`) |
+| `GITHUB_TOKEN` | PAT for private repos + higher API rate limits |
 
-Edit **`config.json`**:
-
-- `projects[].id` / `name` — shown on the watch
-- `projects[].cwd` — absolute path to a git repo on this machine
-- `projects[].presets` — short prompts you can launch without a keyboard
+Optional **`config.json`** can still pin specific projects / custom presets; otherwise repos are discovered from GitHub + local clones.
 
 ### 2. Run the daemon
 
@@ -110,9 +112,12 @@ Classic Pebble `MenuLayer` pattern (section headers, title/subtitle rows, invert
 | Select | Open row / run action |
 | Back | Previous screen |
 
-- **Home** — Agents + Controls (`New Task`, `Refresh`)
+- **Home** — Agents + Controls (`Repos`, `Refresh`)
+- **Repos** — Local checkouts first (plus optional remote-only GitHub repos)
+- **Repo** — Git status + last commit · push policy · **Voice** · Presets · last agent
 - **Agent** — Status + Actions (`Stop`, `Approve / Continue`, full message)
-- **New Task** — Projects → Presets
+
+Enable **Settings → Speech Recognition** in the Pebble phone app before using Voice command.
 
 ## Daemon API
 
@@ -121,7 +126,8 @@ All routes except `/health` require `Authorization: Bearer <token>` (or `?token=
 | Method | Path | Purpose |
 |--------|------|---------|
 | `GET` | `/health` | Liveness |
-| `GET` | `/projects` | Configured projects |
+| `GET` | `/projects` | GitHub/local repos (+ last agent fields) |
+| `POST` | `/projects/refresh` | Force re-list from GitHub |
 | `GET` | `/agents` | Session list |
 | `GET` | `/agents/:id` | Session detail |
 | `POST` | `/agents` | `{ projectId, prompt }` start agent |

@@ -184,8 +184,65 @@ export function startServer(
         return;
       }
 
+      if (req.method === "POST" && url.pathname === "/projects/refresh") {
+        await projects.refresh(true);
+        sendJson(res, 200, {
+          ok: true,
+          projects: projects.listForApi((p) => {
+            const last = sessions.latestForProject(p.id);
+            return last
+              ? {
+                  lastAgentId: last.id,
+                  lastTask: last.task,
+                  lastStatus: last.status,
+                  lastActivity: last.lastActivity,
+                }
+              : {};
+          }),
+        });
+        return;
+      }
+
       if (req.method === "GET" && url.pathname === "/projects") {
-        sendJson(res, 200, { projects: projects.list() });
+        // Refresh GitHub/local list in the background; await if still empty.
+        if (projects.list().length === 0) await projects.refresh(true);
+        else void projects.refresh(false);
+
+        sendJson(res, 200, {
+          projects: projects.listForApi((p) => {
+            const last = sessions.latestForProject(p.id);
+            return last
+              ? {
+                  lastAgentId: last.id,
+                  lastTask: last.task,
+                  lastStatus: last.status,
+                  lastActivity: last.lastActivity,
+                }
+              : {};
+          }),
+        });
+        return;
+      }
+
+      const projectMatch = url.pathname.match(/^\/projects\/([^/]+)$/);
+      if (req.method === "GET" && projectMatch) {
+        const projectId = decodeURIComponent(projectMatch[1]!);
+        const detail = await projects.detail(projectId, (p) => {
+          const last = sessions.latestForProject(p.id);
+          return last
+            ? {
+                lastAgentId: last.id,
+                lastTask: last.task,
+                lastStatus: last.status,
+                lastActivity: last.lastActivity,
+              }
+            : {};
+        });
+        if (!detail) {
+          sendError(res, 404, "not_found", "Project not found");
+          return;
+        }
+        sendJson(res, 200, { project: detail });
         return;
       }
 

@@ -1,10 +1,12 @@
 import Poco from "commodetto/Poco";
 import Button from "pebble/button";
+import Dictation from "pebble/dictation";
 import {
   initApi,
   fetchAgents,
   fetchAgent,
   fetchProjects,
+  fetchProject,
   startAgent,
   stopAgent,
   approveAgent,
@@ -17,6 +19,23 @@ const STATUS_H = 18;
 const LINE_H = 16;
 const MAX_AGENTS = 5;
 const WRAP_CHARS = 26;
+const DEFAULT_PRESETS = [
+  "Summarize this repo in 3 bullets.",
+  "Check git status and open work.",
+  "Suggest one small improvement.",
+];
+// Cycle with Select on the Push policy row
+const PUSH_POLICIES = ["none", "ask", "push"];
+const PUSH_LABELS = {
+  none: "No push",
+  ask: "Ask before push",
+  push: "Commit + push",
+};
+const PUSH_SUBS = {
+  none: "Edit only — no commit/push",
+  ask: "Commit ok; stop before push",
+  push: "Commit and push when done",
+};
 
 const render = new Poco(screen);
 const fontHeader = new render.Font("Gothic-Bold", 14);
@@ -57,6 +76,9 @@ let rowIds = null;
 let rowData = null;
 let rowDisabled = null;
 let pollTimer = null;
+let dictation = null;
+let dictating = false;
+let pushPolicy = "none";
 
 function ensureRowArrays(n) {
   if (rowKinds && rowKinds.length >= n) return;
@@ -222,24 +244,49 @@ function buildHome() {
     }
   }
   addHeader("Controls");
-  addCell("New Task", "Choose a repo to work on", "new", null, null, false);
+  addCell("Repos", "Pick a GitHub repo", "new", null, null, false);
   addCell("Refresh", statusLine, "refresh", null, null, false);
+}
+
+function projectLastAgent(project) {
+  if (!project) return null;
+  let fromList = agentForProject(project);
+  if (fromList) return fromList;
+  if (project.lastAgentId || project.lastTask) {
+    return {
+      id: project.lastAgentId || "",
+      name: project.name,
+      task: project.lastTask || "",
+      status: project.lastStatus || "idle",
+      activity: project.lastActivity || project.lastTask || "",
+      elapsed: "",
+    };
+  }
+  return null;
 }
 
 function buildNewAgent() {
   resetRows();
-  addHeader("New Agent");
+  addHeader("Repos");
   if (!projects || !projects.length) {
-    addCell("No repos", "Add projects in config.json", null, null, null, true);
+    addCell("No local repos", "Check daemon / phone link", null, null, null, true);
     return;
   }
   let i;
   for (i = 0; i < projects.length; i++) {
     let p = projects[i];
-    let existing = agentForProject(p);
-    let sub = existing
-      ? statusLabel(existing.status) + " · " + clip(existing.task || existing.activity, 18)
-      : "Tap to open";
+    let existing = projectLastAgent(p);
+    let sub;
+    if (existing) {
+      sub =
+        statusLabel(existing.status) +
+        " · " +
+        clip(existing.task || existing.activity, 18);
+    } else if (p.ready === false) {
+      sub = "Remote only";
+    } else {
+      sub = "Local · no agent yet";
+    }
     addCell(p.name, sub, "repo", p.id, i, false);
   }
 }
@@ -254,37 +301,74 @@ function buildRepo() {
   }
 
   addHeader(p.name || "Repo");
-  let existing = agentForProject(p);
-  if (existing) {
+
+  if (p.branch || p.subject || p.statusLabel) {
     addCell(
-      statusLabel(existing.status),
-      existing.elapsed ? "Elapsed " + existing.elapsed : "Active",
-      "open",
-      existing.id,
-      null,
-      false,
-    );
-    addCell(
-      "Last message",
-      clip(existing.activity || existing.task || "", 26),
+      p.branch ? p.branch + (p.head ? " @" + p.head : "") : "Git",
+      p.statusLabel || (p.dirty ? "dirty" : "clean"),
       "message",
       null,
-      existing.activity || existing.task || "",
+      (p.branch || "") +
+        (p.head ? " @" + p.head : "") +
+        "\n" +
+        (p.statusLabel || "") +
+        (p.subject ? "\n\nLast commit:\n" + p.subject : ""),
       false,
     );
+    addCell(
+      "Last commit",
+      clip(p.subject || "(none)", 26),
+      "message",
+      null,
+      p.subject || "(no commits)",
+      false,
+    );
+  } else if (p.ready === false) {
+    addCell("Not on disk", "Will clone on first start", null, null, null, true);
   } else {
-    addCell("No agent yet", "Pick a task below to start", null, null, null, true);
+    addCell("Loading git...", "Select Refresh below", null, null, null, true);
   }
 
-  addHeader("Start task");
-  let presets = p.presets || [];
-  if (!presets.length) {
-    addCell("No presets", "Add presets in config.json", null, null, null, true);
-  } else {
-    let i;
-    for (i = 0; i < presets.length; i++) {
-      addCell(clip(presets[i], 22), "Start agent", "start", p.id, presets[i], false);
+  let existing = projectLastAgent(p);
+  if (existing) {
+    if (existing.id) {
+      addCell(
+        "Last agent",
+        statusLabel(existing.status) +
+          (existing.elapsed ? " · " + existing.elapsed : ""),
+        "open",
+        existing.id,
+        null,
+        false,
+      );
     }
+    addCell(
+      "Last task",
+      clip(existing.task || existing.activity || "", 26),
+      "message",
+      null,
+      existing.task || existing.activity || "",
+      false,
+    );
+  }
+
+  addHeader("New task");
+  addCell(
+    "Push: " + (PUSH_LABELS[pushPolicy] || pushPolicy),
+    PUSH_SUBS[pushPolicy] || "",
+    "push-cycle",
+    null,
+    null,
+    false,
+  );
+  addCell("Voice command", "Dictate a task for this repo", "voice", p.id, null, false);
+  addCell("Refresh git", "Status + last commit", "refresh-repo", p.id, null, false);
+
+  let presets = p.presets && p.presets.length ? p.presets : DEFAULT_PRESETS;
+  addHeader("Presets");
+  let i;
+  for (i = 0; i < presets.length; i++) {
+    addCell(clip(presets[i], 22), "Start agent", "start", p.id, presets[i], false);
   }
 }
 
@@ -329,6 +413,7 @@ function buildRows() {
 
 function statusTitle() {
   if (screenName === MESSAGE) return clip(messageTitle, 24);
+  if (dictating) return "Listening...";
   if (busy || refreshing) return "Working...";
   if (statusLine && (statusLine.indexOf("Timeout") >= 0 || statusLine.indexOf("error") >= 0 || statusLine.indexOf("Error") >= 0 || statusLine.indexOf("HTTP") >= 0 || statusLine.indexOf("fail") >= 0 || statusLine.indexOf("CURSOR_API_KEY") >= 0)) {
     return clip(statusLine, 24);
@@ -486,29 +571,68 @@ function openNewAgent() {
     });
 }
 
+function applyProjectDetail(detailProject) {
+  if (!detailProject || !selectedProject) return;
+  selectedProject.id = detailProject.id || selectedProject.id;
+  selectedProject.name = detailProject.name || selectedProject.name;
+  selectedProject.ready = detailProject.ready;
+  selectedProject.lastAgentId = detailProject.lastAgentId || selectedProject.lastAgentId;
+  selectedProject.lastTask = detailProject.lastTask || selectedProject.lastTask;
+  selectedProject.lastStatus = detailProject.lastStatus || selectedProject.lastStatus;
+  selectedProject.lastActivity = detailProject.lastActivity || selectedProject.lastActivity;
+  selectedProject.branch = detailProject.branch || "";
+  selectedProject.head = detailProject.head || "";
+  selectedProject.subject = detailProject.subject || "";
+  selectedProject.dirty = !!detailProject.dirty;
+  selectedProject.statusLabel = detailProject.statusLabel || "";
+  selectedProject.changed = detailProject.changed || 0;
+  if (selectedProject.lastAgentId) selectedAgentId = selectedProject.lastAgentId;
+}
+
+function refreshRepoDetail() {
+  if (!selectedProject || !selectedProject.id || !phoneReady) return Promise.resolve();
+  return fetchProject(selectedProject.id).then(function (p) {
+    if (p) applyProjectDetail(p);
+  });
+}
+
 function openRepo(index) {
   selectedProject = projects[index];
-  let existing = agentForProject(selectedProject);
-  selectedAgentId = existing ? existing.id : null;
+  let existing = projectLastAgent(selectedProject);
+  selectedAgentId = existing && existing.id ? existing.id : null;
   detail = null;
   screenName = REPO;
   selectedIndex = 0;
+  busy = true;
+  statusLine = "Reading git...";
   draw();
-  if (existing) {
-    busy = true;
-    draw();
-    fetchAgent(existing.id)
-      .then(function (a) {
-        detail = a;
-      })
-      .catch(function (err) {
-        statusLine = err.message || String(err);
-      })
-      .then(function () {
-        busy = false;
-        draw();
-      });
-  }
+  refreshRepoDetail()
+    .then(function () {
+      let agentId = selectedProject.lastAgentId;
+      if (agentId) {
+        return fetchAgent(agentId).then(function (a) {
+          detail = a;
+        });
+      }
+    })
+    .catch(function (err) {
+      statusLine = err.message || String(err);
+    })
+    .then(function () {
+      busy = false;
+      if (selectedProject && selectedProject.statusLabel) {
+        statusLine = selectedProject.statusLabel;
+      }
+      draw();
+    });
+}
+
+function cyclePushPolicy() {
+  let i = PUSH_POLICIES.indexOf(pushPolicy);
+  if (i < 0) i = 0;
+  pushPolicy = PUSH_POLICIES[(i + 1) % PUSH_POLICIES.length];
+  statusLine = PUSH_LABELS[pushPolicy];
+  draw();
 }
 
 function openAgent(id) {
@@ -541,15 +665,23 @@ function openAgent(id) {
 }
 
 function runStart(projectId, prompt) {
-  if (!projectId || !prompt || busy || refreshing) return;
+  if (!projectId || !prompt || busy || refreshing || dictating) return;
   busy = true;
   statusLine = "Starting...";
   draw();
-  startAgent(projectId, prompt)
+  startAgent(projectId, prompt, pushPolicy)
     .then(function (agent) {
       selectedAgentId = agent.id;
       detail = agent;
       statusLine = "Started";
+      // Keep last-* fields on the selected project for the repo screen.
+      if (selectedProject && selectedProject.id === projectId) {
+        selectedProject.lastAgentId = agent.id;
+        selectedProject.lastTask = agent.task || prompt;
+        selectedProject.lastStatus = agent.status || "starting";
+        selectedProject.lastActivity = agent.activity || "Starting...";
+        selectedProject.ready = true;
+      }
       return fetchAgents().then(function (list) {
         agents = list || [];
       });
@@ -562,10 +694,13 @@ function runStart(projectId, prompt) {
     })
     .catch(function (err) {
       statusLine = err.message || String(err);
-      // If the error is the API key message, open it full-screen for readability.
-      if (String(statusLine).indexOf("CURSOR_API_KEY") >= 0) {
+      if (String(statusLine).indexOf("CURSOR_API_KEY") >= 0 || String(statusLine).indexOf("API key") >= 0) {
         busy = false;
-        openMessage("Error", statusLine + "\n\nOpen PebblePilot settings on your phone and paste your Cursor API key, then Save.");
+        openMessage(
+          "Error",
+          statusLine +
+            "\n\nOpen PebblePilot settings on your phone and paste your Cursor API key, then Save.",
+        );
         return;
       }
       busy = false;
@@ -573,9 +708,72 @@ function runStart(projectId, prompt) {
     });
 }
 
+function ensureDictation() {
+  if (dictation) return dictation;
+  dictation = new Dictation({
+    byteLength: 512,
+    onReadable() {
+      let text = "";
+      try {
+        text = String(this.read() || "").trim();
+      } catch (_) {
+        text = "";
+      }
+      dictating = false;
+      if (!text) {
+        statusLine = "No speech";
+        busy = false;
+        draw();
+        return;
+      }
+      let projectId = selectedProject ? selectedProject.id : null;
+      if (!projectId) {
+        statusLine = "No repo";
+        busy = false;
+        draw();
+        return;
+      }
+      statusLine = "Heard: " + clip(text, 20);
+      draw();
+      runStart(projectId, text);
+    },
+    onError(e) {
+      dictating = false;
+      busy = false;
+      statusLine = "Mic error " + String(e);
+      draw();
+    },
+  });
+  try {
+    dictation.configure({ confirm: true, errorDialogs: true });
+  } catch (_) {}
+  return dictation;
+}
+
+function startVoiceTask() {
+  if (!selectedProject || busy || refreshing || dictating) return;
+  if (!phoneReady) {
+    statusLine = "Phone not ready";
+    draw();
+    return;
+  }
+  dictating = true;
+  busy = true;
+  statusLine = "Speak now...";
+  draw();
+  try {
+    ensureDictation().start();
+  } catch (err) {
+    dictating = false;
+    busy = false;
+    statusLine = err.message || String(err);
+    draw();
+  }
+}
+
 function activate() {
   if (screenName === MESSAGE) return;
-  if (busy || refreshing) return;
+  if (busy || refreshing || dictating) return;
   if (rowKinds[selectedIndex] !== 1 || rowDisabled[selectedIndex]) return;
   let action = rowActions[selectedIndex];
 
@@ -583,7 +781,24 @@ function activate() {
   else if (action === "new") openNewAgent();
   else if (action === "refresh") refreshAgents();
   else if (action === "repo") openRepo(rowData[selectedIndex]);
-  else if (action === "start") runStart(rowIds[selectedIndex], rowData[selectedIndex]);
+  else if (action === "voice") startVoiceTask();
+  else if (action === "push-cycle") cyclePushPolicy();
+  else if (action === "refresh-repo") {
+    busy = true;
+    statusLine = "Reading git...";
+    draw();
+    refreshRepoDetail()
+      .catch(function (err) {
+        statusLine = err.message || String(err);
+      })
+      .then(function () {
+        busy = false;
+        if (selectedProject && selectedProject.statusLabel) {
+          statusLine = selectedProject.statusLabel;
+        }
+        draw();
+      });
+  } else if (action === "start") runStart(rowIds[selectedIndex], rowData[selectedIndex]);
   else if (action === "message") {
     openMessage(rowTitles[selectedIndex] || "Message", rowData[selectedIndex] || fullMessageText());
   } else if (action === "stop" && selectedAgentId) {
