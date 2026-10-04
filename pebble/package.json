@@ -1,0 +1,42 @@
+{
+  "name": "pebblepilot",
+  "author": "PebblePilot",
+  "version": "0.1.0",
+  "keywords": [
+    "pebble-app"
+  ],
+  "private": true,
+  "dependencies": {
+    "@moddable/pebbleproxy": "^0.1.8",
+    "@rebble/clay": "^1.1.0"
+  },
+  "pebble": {
+    "displayName": "PebblePilot",
+    "uuid": "a7c3e91f-4b2d-4f8a-9e16-2d8c5b1a0f33",
+    "projectType": "moddable",
+    "sdkVersion": "3",
+    "enableMultiJS": true,
+    "targetPlatforms": [
+      "emery"
+    ],
+    "watchapp": {
+      "watchface": false
+    },
+    "capabilities": [
+      "configurable"
+    ],
+    "messageKeys": [
+      "CMD",
+      "ARG",
+      "DATA",
+      "STATUS",
+      "PAYLOAD",
+      "CursorApiKey",
+      "DaemonUrl",
+      "DaemonToken"
+    ],
+    "resources": {
+      "media": []
+    }
+  }
+}

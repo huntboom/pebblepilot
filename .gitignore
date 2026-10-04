@@ -1,0 +1,28 @@
+# Secrets / local config
+.env
+.env.*
+!.env.example
+config.json
+
+# Generated watch config (contains local token/URL)
+pebble/src/embeddedjs/config.js
+
+# Dependencies / build
+node_modules/
+dist/
+build/
+**/build/
+*.pbw
+*.tsbuildinfo
+*.log
+
+# Tooling / OS
+.DS_Store
+.idea/
+.vscode/
+.pebble-sdk/
+pebble/.build/
+pebble/.lock-waf_*
+**/.lock-waf_*
+daemon/data/
+!pebble/package.json

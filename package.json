@@ -1,0 +1,20 @@
+{
+  "name": "pebblepilot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pebble Time 2 remote for Cursor agents",
+  "workspaces": [
+    "daemon"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w daemon",
+    "start": "npm run start -w daemon",
+    "build": "npm run build -w daemon",
+    "typecheck": "npm run typecheck -w daemon",
+    "sync-watch": "node scripts/sync-watch-config.mjs",
+    "smoke": "bash scripts/smoke.sh"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "include": [
+    "$(MODDABLE)/examples/manifest_mod.json"
+  ],
+  "modules": {
+    "*": [
+      "./main",
+      "./api",
+      "./config"
+    ]
+  },
+  "creation": {
+    "static": 65536,
+    "chunk": {
+      "initial": 24576,
+      "incremental": 2048
+    },
+    "heap": {
+      "initial": 2048,
+      "incremental": 128
+    },
+    "stack": 512
+  }
+}

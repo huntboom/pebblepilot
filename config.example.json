@@ -1,0 +1,29 @@
+{
+  "host": "127.0.0.1",
+  "port": 8787,
+  "token": "change-me-to-a-long-random-string",
+  "cursorApiKeyEnv": "CURSOR_API_KEY",
+  "defaultModel": "composer-2.5",
+  "pollIntervalMs": 4000,
+  "projects": [
+    {
+      "id": "digital-den",
+      "name": "Digital Den",
+      "cwd": "/home/you/github/digital-den",
+      "presets": [
+        "Fix the most recent failing tests.",
+        "Investigate and fix the mobile camera controls.",
+        "Summarize current git status and open issues."
+      ]
+    },
+    {
+      "id": "pebblepilot",
+      "name": "PebblePilot",
+      "cwd": "/home/you/github/pebblepilot",
+      "presets": [
+        "Improve the Pebble UI status screens.",
+        "Add tests for the daemon session manager."
+      ]
+    }
+  ]
+}
